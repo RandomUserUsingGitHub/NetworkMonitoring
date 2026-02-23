@@ -31,7 +31,14 @@ _Coming soon_
 
 ## Installation
 
-### For users — Download from Releases
+### Homebrew (recommended)
+
+```bash
+brew tap RandomUserUsingGitHub/tap
+brew install --cask network-monitor
+```
+
+### Manual — Download from Releases
 
 1. Go to [Releases](../../releases) and download the latest `NetworkMonitor-release.zip`
 2. Unzip it
@@ -49,8 +56,8 @@ bash install.sh
 **Requirements:** macOS 13+, Xcode 15+
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/NetworkMonitor.git
-cd NetworkMonitor
+git clone https://github.com/RandomUserUsingGitHub/NetworkMonitoring.git
+cd NetworkMonitoring
 open NetworkMonitor.xcodeproj
 # Press ⌘R to build and run
 ```

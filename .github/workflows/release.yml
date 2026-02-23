@@ -64,6 +64,13 @@ jobs:
           echo "Zip size: $(du -sh NetworkMonitor-release.zip | cut -f1)"
           unzip -l NetworkMonitor-release.zip
 
+      - name: Compute sha256
+        id: sha
+        run: |
+          SHA=$(shasum -a 256 NetworkMonitor-release.zip | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "SHA-256: $SHA"
+
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
@@ -72,6 +79,14 @@ jobs:
             ## 🌐 Network Monitor ${{ github.ref_name }}
 
             ### How to install
+
+            **Option 1 — Homebrew (recommended)**
+            ```
+            brew tap RandomUserUsingGitHub/tap
+            brew install --cask network-monitor
+            ```
+
+            **Option 2 — Manual**
             1. Download **NetworkMonitor-release.zip** below ↓
             2. Unzip it
             3. Drag `NetworkMonitor.app` → `/Applications`
@@ -83,7 +98,49 @@ jobs:
 
             ### Requirements
             macOS 13 or later
+
+            ### SHA-256
+            `${{ steps.sha.outputs.sha256 }}`
           files: NetworkMonitor-release.zip
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: RandomUserUsingGitHub/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Download release zip for sha256
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          curl -sL -o release.zip "https://github.com/RandomUserUsingGitHub/NetworkMonitoring/releases/download/${GITHUB_REF_NAME}/NetworkMonitor-release.zip"
+          SHA=$(sha256sum release.zip | awk '{print $1}')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "SHA256=$SHA" >> "$GITHUB_ENV"
+          echo "Version: $VERSION, SHA-256: $SHA"
+
+      - name: Update Cask formula
+        run: |
+          CASK="homebrew-tap/Casks/network-monitor.rb"
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$CASK"
+          sed -i "s/sha256 \".*\"/sha256 \"${SHA256}\"/" "$CASK"
+          echo "Updated Cask:"
+          head -5 "$CASK"
+
+      - name: Commit and push
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/network-monitor.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Update network-monitor to ${VERSION}"
+          git push
