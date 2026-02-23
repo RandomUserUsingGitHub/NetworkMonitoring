@@ -11,7 +11,9 @@ CFG="$HOME/.config/network-monitor/settings.json"
 
 jget() {
   awk "/\"$1\"/{f=1} f && /\"$2\"/{
-    match(\$0,/: *\"?([^,\"\}]+)\"?/,a); print a[1]; f=0; exit
+    sub(/^[^:]*: *\"?/, \"\")
+    sub(/\"? *,? *$/, \"\")
+    print; exit
   }" "$CFG" 2>/dev/null
 }
 

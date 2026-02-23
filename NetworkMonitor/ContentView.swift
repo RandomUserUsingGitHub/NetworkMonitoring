@@ -12,7 +12,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             t.bg.ignoresSafeArea()
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     HeaderBar(model: model, showSettings: $showSettings)
                         .padding(.bottom, 12)

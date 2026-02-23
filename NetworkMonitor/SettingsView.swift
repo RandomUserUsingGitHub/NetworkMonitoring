@@ -12,7 +12,7 @@ struct SettingsView: View {
     var body: some View {
         ZStack {
             theme.bg.ignoresSafeArea()
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     settingsHeader
                     pingSection
