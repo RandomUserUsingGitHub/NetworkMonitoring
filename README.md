@@ -17,7 +17,7 @@
 - **IP censoring** — optionally censor IP in notifications when a change is detected
 - **In-app settings** — configure everything without touching config files
 - **Themes** — green, amber, blue, red
-- **Customisable subtitle** — change "by Armin Hashemi" to anything you like
+- **Customisable subtitle** — change "by Armin Hashemi" to anything you like (I'll allow it :D)
 - **Login item control** — toggle start-at-login from inside the app
 - **Configurable ping** — host, interval, timeout, packet size, fail threshold
 
