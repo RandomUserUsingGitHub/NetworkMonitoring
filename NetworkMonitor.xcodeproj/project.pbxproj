@@ -14,7 +14,10 @@
 		AB06 = {isa = PBXBuildFile; fileRef = FB06; };
 		AB07 = {isa = PBXBuildFile; fileRef = FB07; };
 		AB08 = {isa = PBXBuildFile; fileRef = FB08; };
-		AB09 = {isa = PBXBuildFile; fileRef = FB10; };
+		AB09 = {isa = PBXBuildFile; fileRef = FB09; };
+		AB10 = {isa = PBXBuildFile; fileRef = FB10; };
+		AB11 = {isa = PBXBuildFile; fileRef = FB11; };
+		AB12 = {isa = PBXBuildFile; fileRef = FB13; };
 
 /* PBXFileReference */
 		FB01 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitorApp.swift; sourceTree = "<group>"; };
@@ -25,15 +28,18 @@
 		FB06 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatCard.swift;          sourceTree = "<group>"; };
 		FB07 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift;          sourceTree = "<group>"; };
 		FB08 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift;      sourceTree = "<group>"; };
-		FB09 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml;   path = NetworkMonitor.entitlements; sourceTree = "<group>"; };
-		FB10 = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		FB09 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTest.swift;         sourceTree = "<group>"; };
+		FB10 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTestView.swift;     sourceTree = "<group>"; };
+		FB11 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPDetailsView.swift;     sourceTree = "<group>"; };
+		FB12 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml;   path = NetworkMonitor.entitlements; sourceTree = "<group>"; };
+		FB13 = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets;     sourceTree = "<group>"; };
 		PROD = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NetworkMonitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 
 /* PBXGroup */
 		GRP0 = { isa = PBXGroup; children = (GRP1, GRP2); sourceTree = "<group>"; };
 		GRP1 = {
 			isa = PBXGroup;
-			children = (FB01, FB02, FB03, FB04, FB05, FB06, FB07, FB08, FB09, FB10);
+			children = (FB01,FB02,FB03,FB04,FB05,FB06,FB07,FB08,FB09,FB10,FB11,FB12,FB13);
 			path = NetworkMonitor;
 			sourceTree = "<group>";
 		};
@@ -75,13 +81,12 @@
 
 /* Build phases */
 		PHS1 = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (AB01, AB02, AB03, AB04, AB05, AB06, AB07, AB08);
+			isa = PBXSourcesBuildPhase; buildActionMask = 2147483647;
+			files = (AB01,AB02,AB03,AB04,AB05,AB06,AB07,AB08,AB09,AB10,AB11);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		PHS2 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		PHS3 = { isa = PBXResourcesBuildPhase;  buildActionMask = 2147483647; files = (AB09); runOnlyForDeploymentPostprocessing = 0; };
+		PHS3 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (AB12); runOnlyForDeploymentPostprocessing = 0; };
 
 /* XCBuildConfiguration */
 		CFG1 = {
@@ -92,7 +97,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GCC_OPTIMIZATION_LEVEL = 0;
-				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1","$(inherited)");
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
@@ -123,14 +128,13 @@
 				CODE_SIGN_ENTITLEMENTS = NetworkMonitor/NetworkMonitor.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
-				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/../Frameworks");
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armin.network-monitor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -145,14 +149,13 @@
 				CODE_SIGN_ENTITLEMENTS = NetworkMonitor/NetworkMonitor.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
-				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/../Frameworks");
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/../Frameworks");
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armin.network-monitor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -162,8 +165,8 @@
 		};
 
 /* XCConfigurationList */
-		BCL1 = { isa = XCConfigurationList; buildConfigurations = (CFG1, CFG2); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		BCL2 = { isa = XCConfigurationList; buildConfigurations = (CFG3, CFG4); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		BCL1 = { isa = XCConfigurationList; buildConfigurations = (CFG1,CFG2); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		BCL2 = { isa = XCConfigurationList; buildConfigurations = (CFG3,CFG4); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 
 	};
 	rootObject = PROJ;
