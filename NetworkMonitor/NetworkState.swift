@@ -69,6 +69,7 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
 
     // Tracking logic to fire notifications on state transition differences
     private var previousStatus: ConnectionStatus? = nil
+    private var previousIP: String = ""
     
     override init() {
         super.init()
@@ -131,6 +132,18 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
             ipDetails.ip      = ip
             ipDetails.country = parts.count > 1 ? parts[1] : "—"
             ipDetails.city    = parts.count > 2 ? parts[2] : "—"
+            // Only notify once per unique IP change, using a dedicated tracker
+            if !previousIP.isEmpty && previousIP != ip && settings.notificationsEnabled && !settings.isMuted {
+                let shouldCensor = settings.censorIPOnChange
+                let displayIP = shouldCensor ? "••••••••••" : ip
+                let displayOld = shouldCensor ? "••••••••••" : previousIP
+                sendNotification(
+                    title: "🌐 Public IP Changed",
+                    body: "\(displayOld) → \(displayIP) (\(ipDetails.city), \(ipDetails.country))",
+                    categoryId: nil
+                )
+            }
+            previousIP = ip
         }
     }
 
@@ -254,54 +267,74 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     
     // MARK: - Notifications
     
+    private var notificationAuthGranted = false
+    
     private func setupNotifications() {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] granted, error in
+            DispatchQueue.main.async {
+                self?.notificationAuthGranted = granted
+            }
+            if !granted {
+                print("[NetworkMonitor] UNUserNotificationCenter authorization denied or unavailable. Will use fallback.")
+            }
+        }
         
         let mute1h = UNNotificationAction(identifier: "MUTE_1H", title: "Mute 1 Hour", options: [])
         let mute24 = UNNotificationAction(identifier: "MUTE_24H", title: "Mute 24 Hours", options: [])
-        let category = UNNotificationCategory(identifier: "OUTAGE", actions: [mute1h, mute24], intentIdentifiers: [])
+        let category = UNNotificationCategory(identifier: "OUTAGE", actions: [mute1h, mute24], intentIdentifiers: [], options: [.customDismissAction])
         center.setNotificationCategories([category])
     }
     
     private func handleStatusChange(from old: ConnectionStatus, to new: ConnectionStatus) {
         guard settings.notificationsEnabled, !settings.isMuted else { return }
         
-        let content = UNMutableNotificationContent()
-        content.sound = UNNotificationSound(named: UNNotificationSoundName(settings.notificationSound))
-        
         if new == .offline {
-            content.title = "🔴 Internet Outage"
-            content.body = "Connection to \(settings.pingHost) failed."
-            content.categoryIdentifier = "OUTAGE"
+            sendNotification(
+                title: "🔴 Internet Outage",
+                body: "Connection to \(settings.pingHost) failed.",
+                categoryId: "OUTAGE"
+            )
         } else if new == .online && old == .offline {
-            content.title = "🟢 Internet Restored"
-            content.body = "Connection to \(settings.pingHost) is back."
-        } else {
-            return // don't notify for other transitions
+            sendNotification(
+                title: "🟢 Internet Restored",
+                body: "Connection to \(settings.pingHost) is back.",
+                categoryId: nil
+            )
         }
-        
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
     }
 
+    private func sendNotification(title: String, body: String, categoryId: String?) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = UNNotificationSound(named: UNNotificationSoundName(settings.notificationSound))
+        if let cat = categoryId { content.categoryIdentifier = cat }
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("[NetworkMonitor] Notification delivery failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
+    
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         if response.actionIdentifier == "MUTE_1H" {
             settings.muteOutagesUntil = Date().addingTimeInterval(3600)
         } else if response.actionIdentifier == "MUTE_24H" {
             settings.muteOutagesUntil = Date().addingTimeInterval(86400)
         } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-            // User clicked the notification itself
             DispatchQueue.main.async {
-                NSApp.activate(ignoringOtherApps: true)
-                if let window = NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first(where: { $0.canBecomeKey }) {
-                    window.makeKeyAndOrderFront(nil)
-                } else if #available(macOS 13.0, *) {
-                    NSApp.sendAction(Selector(("newDocument:")), to: nil, from: nil)
-                }
+                AppDelegate.showMainWindow()
             }
         }
         completionHandler()
     }
 }
+

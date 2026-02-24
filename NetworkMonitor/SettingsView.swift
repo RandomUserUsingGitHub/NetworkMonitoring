@@ -146,6 +146,15 @@ struct SettingsView: View {
                         .background(t.bg2).cornerRadius(4)
                     }
                 }
+            } else {
+                SRow(label: "Mute Outages", theme: t) {
+                    HStack(spacing: 8) {
+                        Button("1 Hour") { settings.muteOutagesUntil = Date().addingTimeInterval(3600) }
+                            .buttonStyle(.plain).padding(.horizontal, 8).padding(.vertical, 3).background(t.bg2).cornerRadius(4)
+                        Button("24 Hours") { settings.muteOutagesUntil = Date().addingTimeInterval(86400) }
+                            .buttonStyle(.plain).padding(.horizontal, 8).padding(.vertical, 3).background(t.bg2).cornerRadius(4)
+                    }
+                }
             }
         }
     }
@@ -163,6 +172,7 @@ struct SettingsView: View {
                         Text("Icon Only").tag("icon")
                         Text("Ping Only").tag("ping")
                         Text("Icon + Ping").tag("both")
+                        Text("Status Text").tag("status")
                     }.pickerStyle(.menu).frame(width: 140)
                 }
             }

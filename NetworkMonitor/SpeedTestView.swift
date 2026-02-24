@@ -78,7 +78,7 @@ struct SpeedTestView: View {
             Text("SERVER")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(t.dim)
-            ScrollView(.horizontal, showsIndicators: false) {
+            HorizontalWheelScrollView {
                 HStack(spacing: 8) {
                     ForEach(SpeedServer.presets) { server in
                         ServerChip(
@@ -418,6 +418,64 @@ struct HistoryRow: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Native Horizontal Scroll View
+
+struct HorizontalWheelScrollView<Content: View>: NSViewRepresentable {
+    var content: Content
+    
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+    
+    func makeNSView(context: Context) -> TranslatingScrollView {
+        let scrollView = TranslatingScrollView()
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.sizingOptions = [.intrinsicContentSize]
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.documentView = hostingView
+        
+        NSLayoutConstraint.activate([
+            hostingView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor),
+            hostingView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            hostingView.trailingAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.trailingAnchor)
+        ])
+        
+        return scrollView
+    }
+    
+    func updateNSView(_ scrollView: TranslatingScrollView, context: Context) {
+        if let hostingView = scrollView.documentView as? NSHostingView<Content> {
+            hostingView.rootView = content
+        }
+    }
+}
+
+final class TranslatingScrollView: NSScrollView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        hasVerticalScroller = false
+        hasHorizontalScroller = false
+        autohidesScrollers = true
+        drawsBackground = false
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    override func scrollWheel(with event: NSEvent) {
+        if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+            super.scrollWheel(with: event)
+            return
+        }
+        guard let docView = documentView else { return }
+        let curX = contentView.bounds.origin.x
+        let maxX = max(0, docView.bounds.width - contentView.bounds.width)
+        let newX = max(0, min(curX - event.scrollingDeltaY * 3, maxX))
+        
+        contentView.bounds.origin.x = newX
     }
 }
 
