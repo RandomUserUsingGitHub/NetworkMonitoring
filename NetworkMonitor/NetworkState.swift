@@ -1,4 +1,7 @@
 import Foundation
+import SwiftUI
+import AppKit
+import UserNotifications
 
 enum ConnectionStatus: String {
     case online  = "ONLINE"
@@ -28,7 +31,7 @@ struct IPDetails {
     var tor:      Bool   = false
 }
 
-final class NetworkStateModel: ObservableObject {
+final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     @Published var status:      ConnectionStatus = .starting
     @Published var pingHistory: [Double?]        = []
     @Published var latestPing:  Double?          = nil
@@ -64,6 +67,14 @@ final class NetworkStateModel: ObservableObject {
     private var lastRawIP:   String = ""
     private var fetchInFlight = false
 
+    // Tracking logic to fire notifications on state transition differences
+    private var previousStatus: ConnectionStatus? = nil
+    
+    override init() {
+        super.init()
+        setupNotifications()
+    }
+
     func start() {
         refresh()
         fetchIPDetails()
@@ -92,7 +103,13 @@ final class NetworkStateModel: ObservableObject {
 
     private func readStatus() {
         guard let raw = try? String(contentsOf: statusFile, encoding: .utf8) else { status = .starting; return }
-        status = ConnectionStatus(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .starting
+        let newStatus = ConnectionStatus(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .starting
+        
+        if previousStatus != nil && previousStatus != newStatus {
+            handleStatusChange(from: previousStatus!, to: newStatus)
+        }
+        previousStatus = newStatus
+        status = newStatus
     }
 
     private func readPingHistory() {
@@ -129,9 +146,14 @@ final class NetworkStateModel: ObservableObject {
                 let i21 = line.index(line.startIndex, offsetBy: 21)
                 text = "[" + line[i12..<i19] + "]" + line[i21...]
             }
-            // Censor IP in log display if hidden
-            if settings.ipHidden, ipDetails.ip != "—", !ipDetails.ip.isEmpty {
-                text = text.replacingOccurrences(of: ipDetails.ip, with: "█████████")
+            // Censor any IPv4 in log display if hidden
+            if settings.ipHidden {
+                // simple regex for IPv4
+                text = text.replacingOccurrences(
+                    of: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b",
+                    with: "█████████",
+                    options: .regularExpression
+                )
             }
             let kind: LogEntry.Kind
             if      line.contains("OUTAGE")      || line.contains("failed")    { kind = .outage   }
@@ -228,5 +250,58 @@ final class NetworkStateModel: ObservableObject {
             try? start.run(); start.waitUntilExit()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.refresh() }
         }
+    }
+    
+    // MARK: - Notifications
+    
+    private func setupNotifications() {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        
+        let mute1h = UNNotificationAction(identifier: "MUTE_1H", title: "Mute 1 Hour", options: [])
+        let mute24 = UNNotificationAction(identifier: "MUTE_24H", title: "Mute 24 Hours", options: [])
+        let category = UNNotificationCategory(identifier: "OUTAGE", actions: [mute1h, mute24], intentIdentifiers: [])
+        center.setNotificationCategories([category])
+    }
+    
+    private func handleStatusChange(from old: ConnectionStatus, to new: ConnectionStatus) {
+        guard settings.notificationsEnabled, !settings.isMuted else { return }
+        
+        let content = UNMutableNotificationContent()
+        content.sound = UNNotificationSound(named: UNNotificationSoundName(settings.notificationSound))
+        
+        if new == .offline {
+            content.title = "🔴 Internet Outage"
+            content.body = "Connection to \(settings.pingHost) failed."
+            content.categoryIdentifier = "OUTAGE"
+        } else if new == .online && old == .offline {
+            content.title = "🟢 Internet Restored"
+            content.body = "Connection to \(settings.pingHost) is back."
+        } else {
+            return // don't notify for other transitions
+        }
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.actionIdentifier == "MUTE_1H" {
+            settings.muteOutagesUntil = Date().addingTimeInterval(3600)
+        } else if response.actionIdentifier == "MUTE_24H" {
+            settings.muteOutagesUntil = Date().addingTimeInterval(86400)
+        } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            // User clicked the notification itself
+            DispatchQueue.main.async {
+                NSApp.activate(ignoringOtherApps: true)
+                if let window = NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first(where: { $0.canBecomeKey }) {
+                    window.makeKeyAndOrderFront(nil)
+                } else if #available(macOS 13.0, *) {
+                    NSApp.sendAction(Selector(("newDocument:")), to: nil, from: nil)
+                }
+            }
+        }
+        completionHandler()
     }
 }

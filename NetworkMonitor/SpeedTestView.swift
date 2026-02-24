@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SpeedTestView: View {
-    @StateObject private var vm = SpeedTestModel()
+    @ObservedObject var vm: SpeedTestModel
     @ObservedObject  private var settings = Settings.shared
     var t: AppTheme { AppTheme.named(settings.theme) }
 
@@ -92,8 +92,8 @@ struct SpeedTestView: View {
                 }
                 .padding(.horizontal, 2)
                 .padding(.vertical, 2)
+                .padding(.trailing, 20)
             }
-            .frame(maxWidth: .infinity)
         }
     }
 
@@ -137,16 +137,7 @@ struct SpeedTestView: View {
                         .foregroundStyle(t.accent)
                 }
             }
-            // Progress bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4).fill(t.bg2)
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(LinearGradient(colors: [t.graphOk, t.accent], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: geo.size.width * vm.progress)
-                }
-            }
-            .frame(height: 6)
+            // Progress bar removed per request
 
             // Side-by-side charts: Download | Upload
             let dlSamples = vm.samples.filter { $0.phase == .download }
@@ -182,7 +173,7 @@ struct SpeedTestView: View {
 
     private var resultCards: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("RESULTS — \(vm.selectedServer.name)")
+            Text("RESULTS — \(vm.testedServer?.name ?? vm.selectedServer.name)")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(t.dim)
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
@@ -267,24 +258,23 @@ struct ServerChip: View {
     let theme: AppTheme
     let action: () -> Void
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 2) {
-                Text(server.name)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .fixedSize(horizontal: true, vertical: false)
-                Text(server.location)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(selected ? theme.bg.opacity(0.7) : theme.dim)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            .foregroundStyle(selected ? theme.bg : theme.text)
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(selected ? theme.accent : theme.bg2)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7)
-                .stroke(theme.border.opacity(selected ? 0 : 0.3), lineWidth: 1))
+        VStack(spacing: 2) {
+            Text(server.name)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .fixedSize(horizontal: true, vertical: false)
+            Text(server.location)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(selected ? theme.bg.opacity(0.7) : theme.dim)
+                .fixedSize(horizontal: true, vertical: false)
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(selected ? theme.bg : theme.text)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(selected ? theme.accent : theme.bg2)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7)
+            .stroke(theme.border.opacity(selected ? 0 : 0.3), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
     }
 }
 
@@ -329,15 +319,26 @@ struct SingleSparkline: View {
 
     var body: some View {
         GeometryReader { geo in
-            let peak = samples.map { $0.mbps }.max() ?? 1
+            let peak = max(samples.map { $0.mbps }.max() ?? 1, 1) // Ensure peak is at least 1
             let n    = samples.count
             ZStack(alignment: .topLeading) {
                 theme.bg2
+                
+                // Grid lines & labels
+                if peak > 1 {
+                    VStack(spacing: 0) {
+                        gridLine(label: String(format: "%.0f", peak), color: color.opacity(0.4), geo: geo)
+                        Spacer()
+                        gridLine(label: String(format: "%.0f", peak / 2), color: color.opacity(0.2), geo: geo)
+                        Spacer()
+                    }
+                }
+                
                 if n > 1 {
                     let pts: [CGPoint] = samples.enumerated().map { (i, s) in
                         CGPoint(
                             x: geo.size.width  * CGFloat(i) / CGFloat(n - 1),
-                            y: geo.size.height * CGFloat(1 - s.mbps / peak)
+                            y: geo.size.height * CGFloat(1 - (s.mbps / peak))
                         )
                     }
                     // Fill
@@ -362,6 +363,22 @@ struct SingleSparkline: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
+    }
+    
+    private func gridLine(label: String, color: Color, geo: GeometryProxy) -> some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .font(.system(size: 7, design: .monospaced))
+                .foregroundStyle(theme.dim)
+                .frame(width: 24, alignment: .trailing)
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addLine(to: CGPoint(x: geo.size.width - 26, y: 0))
+            }
+            .stroke(color, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .frame(height: 1)
+        }
+        .padding(.top, 2)
     }
 }
 
@@ -403,3 +420,4 @@ struct HistoryRow: View {
         .onHover { hovering = $0 }
     }
 }
+

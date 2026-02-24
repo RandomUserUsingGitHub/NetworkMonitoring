@@ -45,8 +45,8 @@ STATUS="/tmp/.netmon_status"
 # ── helpers ─────────────────────────────────────────────────────
 
 notify() {
-  [[ "$NOTIF_ENABLED" != "true" ]] && return
-  osascript -e "display notification \"$2\" with title \"$1\" sound name \"$NOTIF_SOUND\""
+  # Disabled in favor of native Swift UNUserNotificationCenter
+  return
 }
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_PATH"; }

@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var model = NetworkStateModel()
+    @StateObject private var speedTestModel = SpeedTestModel()
     @ObservedObject private var settings = Settings.shared
     @State private var tab: Tab = .dashboard
     @State private var showSettings = false
@@ -21,7 +22,7 @@ struct ContentView: View {
                 switch tab {
                 case .dashboard: DashboardView(model: model, showSettings: $showSettings)
                 case .ipDetails: IPDetailsView(model: model)
-                case .speedTest: SpeedTestView()
+                case .speedTest: SpeedTestView(vm: speedTestModel)
                 }
             }
             .padding(.bottom, 48)
@@ -138,16 +139,15 @@ struct HeaderBar: View {
 /// Standalone clock that actually ticks every second
 struct ClockView: View {
     let theme: AppTheme
-    @State private var now: Date = Date()
-    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let fmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss  EEE d MMM"; return f
     }()
     var body: some View {
-        Text(fmt.string(from: now))
-            .font(.system(size:11, design:.monospaced))
-            .foregroundStyle(theme.dim)
-            .onReceive(ticker) { now = $0 }
+        TimelineView(.periodic(from: .now, by: 1.0)) { context in
+            Text(fmt.string(from: context.date))
+                .font(.system(size:11, design:.monospaced))
+                .foregroundStyle(theme.dim)
+        }
     }
 }
 

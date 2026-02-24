@@ -4,108 +4,110 @@ import AppKit
 @main
 struct NetworkMonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @StateObject private var trayModel = TrayModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView()
                 .frame(width: 560, height: 620)
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
         .commands { CommandGroup(replacing: .newItem) {} }
+        
+        MenuBarExtra {
+            Button("Open Network Monitor") {
+                NSApp.activate(ignoringOtherApps: true)
+                if let w = NSApp.windows.first(where: { $0.canBecomeKey }) {
+                    w.makeKeyAndOrderFront(nil)
+                } else {
+                    NSApp.sendAction(Selector(("newDocument:")), to: nil, from: nil)
+                }
+            }
+            Divider()
+            Button("Quit") {
+                NSApplication.shared.terminate(nil)
+            }
+        } label: {
+            TrayLabelView(model: trayModel)
+        }
     }
 }
 
-// MARK: - AppDelegate — menu bar / system tray
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem?
-    private var trayTimer: Timer?
-    private var trayModel = TrayModel()
-
+class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         Settings.shared.writeDaemonConfig()
-        setupMenuBar()
     }
-
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
 
-    // MARK: - Menu bar
-
-    private func setupMenuBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateTray(ping: nil, status: .starting)
-
-        // Poll state files every second for tray updates
-        trayTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.trayModel.refresh()
-        }
-
-        // Menu
-        let menu = NSMenu()
-        menu.addItem(NSMenuItem(title:"Open Network Monitor", action:#selector(openWindow), keyEquivalent:""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title:"Quit", action:#selector(NSApplication.terminate(_:)), keyEquivalent:"q"))
-        statusItem?.menu = menu
-
-        // Observe model changes
-        trayModel.onUpdate = { [weak self] ping, status in
-            self?.updateTray(ping: ping, status: status)
-        }
+// MARK: - Tray Label View
+struct TrayLabelView: View {
+    @ObservedObject var model: TrayModel
+    // Read trayFormat directly from UserDefaults to avoid observing Settings (which triggers save loops)
+    private var trayFormat: String {
+        UserDefaults.standard.string(forKey: "netmon.trayFormat") ?? "both"
     }
-
-    private func updateTray(ping: Double?, status: ConnectionStatus) {
-        guard let button = statusItem?.button else { return }
-        DispatchQueue.main.async {
-            switch status {
-            case .offline:
-                button.title = "🔴 —"
-            case .starting:
-                button.title = "⚪ …"
-            case .online:
-                if let p = ping {
-                    let icon = p < 80 ? "🟢" : p < 200 ? "🟡" : "🔴"
-                    button.title = "\(icon) \(Int(p))ms"
-                } else {
-                    button.title = "🟢"
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            if ["both", "icon"].contains(trayFormat) {
+                switch model.status {
+                case .offline:  Text("🔴")
+                case .starting: Text("⚪")
+                case .online:
+                    if let p = model.ping {
+                        Text(p < 80 ? "🟢" : p < 200 ? "🟡" : "🔴")
+                    } else {
+                        Text("🟢")
+                    }
                 }
             }
-        }
-    }
-
-    @objc private func openWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        // Find an existing content window, or the first window that can become key
-        if let window = NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first(where: { $0.canBecomeKey }) {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            // No window found — the user closed it. Open a new one.
-            // For SwiftUI WindowGroup apps, we can re-open via the standard new-window action.
-            if #available(macOS 13.0, *) {
-                // sendAction for newDocument: triggers WindowGroup to create a new window
-                NSApp.sendAction(Selector(("newDocument:")), to: nil, from: nil)
+            if ["both", "ping"].contains(trayFormat) {
+                if model.status == .offline { Text("—") }
+                else if model.status == .starting { Text("…") }
+                else if let p = model.ping { Text("\(Int(p))ms") }
             }
         }
+        .onAppear { model.startRefreshing() }
     }
 }
 
 // MARK: - TrayModel (lightweight — reads files without full model overhead)
 
-final class TrayModel {
-    var onUpdate: ((Double?, ConnectionStatus) -> Void)?
+final class TrayModel: ObservableObject {
+    @Published var ping: Double? = nil
+    @Published var status: ConnectionStatus = .starting
+    
+    private var timer: Timer?
     private let histFile   = URL(fileURLWithPath:"/tmp/.netmon_ping_history")
     private let statusFile = URL(fileURLWithPath:"/tmp/.netmon_status")
-
-    func refresh() {
-        let statusRaw = (try? String(contentsOf:statusFile, encoding:.utf8))?.trimmingCharacters(in:.whitespacesAndNewlines) ?? ""
-        let status    = ConnectionStatus(rawValue:statusRaw) ?? .starting
-
-        var ping: Double? = nil
-        if let raw = try? String(contentsOf:histFile, encoding:.utf8) {
-            let lines = raw.components(separatedBy:.newlines).filter{!$0.isEmpty}
-            if let last = lines.last, last != "T" { ping = Double(last) }
+    
+    func startRefreshing() {
+        guard timer == nil else { return }
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refresh()
         }
-        onUpdate?(ping, status)
+    }
+
+    private func refresh() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            let statusRaw = (try? String(contentsOf:self.statusFile, encoding:.utf8))?.trimmingCharacters(in:.whitespacesAndNewlines) ?? ""
+            let newStatus = ConnectionStatus(rawValue:statusRaw) ?? .starting
+
+            var newPing: Double? = nil
+            if let raw = try? String(contentsOf:self.histFile, encoding:.utf8) {
+                let lines = raw.components(separatedBy:.newlines).filter{!$0.isEmpty}
+                if let last = lines.last, last != "T" { newPing = Double(last) }
+            }
+            
+            DispatchQueue.main.async {
+                self.ping = newPing
+                self.status = newStatus
+            }
+        }
     }
 }

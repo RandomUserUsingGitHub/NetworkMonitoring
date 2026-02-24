@@ -69,6 +69,7 @@ final class SpeedTestModel: ObservableObject {
     @Published var liveSpeed:    Double          = 0
     @Published var samples:      [SpeedSample]   = []
     @Published var selectedServer: SpeedServer   = SpeedServer.presets[0]
+    @Published var testedServer:   SpeedServer?  = nil
     @Published var history:      [SpeedResult]   = []
 
     private var runTask: Task<Void, Never>?
@@ -108,9 +109,13 @@ final class SpeedTestModel: ObservableObject {
     // MARK: - Test sequence
 
     private func runTest() async {
+        // Lock in the server we are testing
+       await MainActor.run { self.testedServer = self.selectedServer }
+       let testSrv = selectedServer
+
         // ── Ping phase (5 samples for jitter) ──
         phase = .ping
-        let host = URL(string: selectedServer.url)?.host ?? "8.8.8.8"
+        let host = URL(string: testSrv.url)?.host ?? "8.8.8.8"
         var pings: [Double] = []
         for _ in 0..<5 {
             if Task.isCancelled { phase = .idle; return }
@@ -139,7 +144,7 @@ final class SpeedTestModel: ObservableObject {
         // ── Download phase (with retry) ──
         phase = .download
         skipRequested = false
-        var dl = await measureDownload(urlStr: selectedServer.url)
+        var dl = await measureDownload(urlStr: testSrv.url)
 
         if skipRequested {
             // User skipped download - use whatever we got so far
@@ -153,7 +158,7 @@ final class SpeedTestModel: ObservableObject {
             // Retry once after a short wait
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             if Task.isCancelled { phase = .idle; return }
-            dl = await measureDownload(urlStr: selectedServer.url)
+            dl = await measureDownload(urlStr: testSrv.url)
             if let dlResult = dl {
                 downloadMbps = dlResult
             } else {
@@ -189,7 +194,7 @@ final class SpeedTestModel: ObservableObject {
 
         // ── Record result ──
         let result = SpeedResult(
-            date: Date(), server: selectedServer.name,
+            date: Date(), server: testSrv.name,
             pingMs: pingMs ?? 0, jitterMs: jitterMs ?? 0,
             downloadMbps: downloadMbps ?? 0, uploadMbps: uploadMbps ?? 0
         )
@@ -259,41 +264,49 @@ final class SpeedTestModel: ObservableObject {
 
     private func measureUpload() async -> Double {
         guard let url = URL(string: "https://httpbin.org/post") else { return 0 }
-        var req  = URLRequest(url: url, timeoutInterval: 20)
-        req.httpMethod = "POST"
-        let payload = Data(repeating: 0x55, count: 2_000_000)
-        req.httpBody = payload
-        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-
-        let start = Date()
-
-        // Simulate upload progress with samples
-        let progressTask = Task {
-            var elapsed = 0.0
-            while !Task.isCancelled && !skipRequested {
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
-                elapsed = Date().timeIntervalSince(start)
-                let estimatedMbps = elapsed > 0 ? Double(payload.count) * 8 / (max(elapsed, 1) * 1_000_000) : 0
+        
+        let chunkSize = 250_000 // 250 KB per chunk
+        let maxChunks = 8       // Total 2 MB
+        let payload = Data(repeating: 0x55, count: chunkSize)
+        
+        var totalBytesUploaded = 0
+        var totalElapsed = 0.0
+        
+        for i in 0..<maxChunks {
+            if Task.isCancelled || skipRequested { break }
+            
+            var req = URLRequest(url: url, timeoutInterval: 10)
+            req.httpMethod = "POST"
+            req.httpBody = payload
+            req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            
+            let chunkStart = Date()
+            _ = try? await URLSession.shared.data(for: req)
+            let chunkElapsed = Date().timeIntervalSince(chunkStart)
+            
+            if chunkElapsed > 0 {
+                let chunkMbps = Double(chunkSize) * 8 / (chunkElapsed * 1_000_000)
+                totalBytesUploaded += chunkSize
+                totalElapsed += chunkElapsed
+                
                 await MainActor.run {
-                    self.liveSpeed = estimatedMbps
-                    self.samples.append(SpeedSample(time: Date(), mbps: estimatedMbps, phase: .upload))
-                    self.progress = min(0.8 + (elapsed / 20.0) * 0.2, 0.99)
+                    self.liveSpeed = chunkMbps
+                    self.samples.append(SpeedSample(time: Date(), mbps: chunkMbps, phase: .upload))
+                    self.progress = min(0.8 + (Double(i + 1) / Double(maxChunks)) * 0.2, 0.99)
                 }
-                if elapsed > 20 { break }
             }
         }
 
-        _ = try? await URLSession.shared.data(for: req)
-        progressTask.cancel()
-
-        if Task.isCancelled || skipRequested { return 0 }
-        let elapsed = Date().timeIntervalSince(start)
-        let mbps = elapsed > 0 ? Double(payload.count) * 8 / (elapsed * 1_000_000) : 0
-
-        // Add final upload sample
-        self.liveSpeed = mbps
-        self.samples.append(SpeedSample(time: Date(), mbps: mbps, phase: .upload))
-
-        return mbps
+        if totalElapsed > 0 && totalBytesUploaded > 0 {
+            let finalMbps = Double(totalBytesUploaded) * 8 / (totalElapsed * 1_000_000)
+            await MainActor.run {
+                self.liveSpeed = finalMbps
+                self.samples.append(SpeedSample(time: Date(), mbps: finalMbps, phase: .upload))
+                self.progress = 1.0
+            }
+            return finalMbps
+        }
+        
+        return 0
     }
 }

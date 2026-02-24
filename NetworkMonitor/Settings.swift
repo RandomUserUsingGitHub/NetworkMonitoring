@@ -20,9 +20,16 @@ final class Settings: ObservableObject {
     @Published var ipInterval:       Double { didSet { save() } }
     @Published var censorIPOnChange:  Bool   { didSet { save() } }
 
+    // Tray
+    @Published var showTrayIcon: Bool   { didSet { save() } }
+    @Published var trayFormat:   String { didSet { save() } } // "icon", "ping", "both"
+
     // Notifications
     @Published var notificationsEnabled: Bool   { didSet { save() } }
     @Published var notificationSound:    String { didSet { save() } }
+    @Published var muteOutagesUntil:     Date   { didSet { save() } }
+    
+    var isMuted: Bool { muteOutagesUntil > Date() }
 
     // UI
     @Published var theme:        String { didSet { save() } }
@@ -53,8 +60,11 @@ final class Settings: ObservableObject {
         thresholdWarn       = d("netmon.thresholdWarn", 200.0)
         ipInterval          = d("netmon.ipInterval", 10.0)
         censorIPOnChange    = b("netmon.censorIPOnChange", false)
+        showTrayIcon        = b("netmon.showTrayIcon", true)
+        trayFormat          = s("netmon.trayFormat", "both")
         notificationsEnabled = b("netmon.notificationsEnabled", true)
         notificationSound   = s("netmon.notificationSound", "Basso")
+        muteOutagesUntil    = defaults.object(forKey: "netmon.muteOutagesUntil") as? Date ?? Date.distantPast
         theme               = s("netmon.theme", "green")
         graphWidth          = i("netmon.graphWidth", 60)
         logTailLines        = i("netmon.logTailLines", 7)
@@ -73,8 +83,11 @@ final class Settings: ObservableObject {
         ud.set(thresholdWarn,        forKey:"netmon.thresholdWarn")
         ud.set(ipInterval,           forKey:"netmon.ipInterval")
         ud.set(censorIPOnChange,     forKey:"netmon.censorIPOnChange")
+        ud.set(showTrayIcon,         forKey:"netmon.showTrayIcon")
+        ud.set(trayFormat,           forKey:"netmon.trayFormat")
         ud.set(notificationsEnabled, forKey:"netmon.notificationsEnabled")
         ud.set(notificationSound,    forKey:"netmon.notificationSound")
+        ud.set(muteOutagesUntil,     forKey:"netmon.muteOutagesUntil")
         ud.set(theme,                forKey:"netmon.theme")
         ud.set(graphWidth,           forKey:"netmon.graphWidth")
         ud.set(logTailLines,         forKey:"netmon.logTailLines")

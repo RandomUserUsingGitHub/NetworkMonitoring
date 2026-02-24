@@ -132,6 +132,21 @@ struct SettingsView: View {
                     }
                 }.pickerStyle(.menu).labelsHidden().frame(width:120)
             }
+            if settings.isMuted {
+                SRow(label: "Outage Muted Until", theme: t) {
+                    HStack {
+                        Text(settings.muteOutagesUntil, style: .time)
+                            .foregroundStyle(t.warn)
+                            .font(.system(size: 11, weight: .bold))
+                        Button("Revert") {
+                            settings.muteOutagesUntil = Date.distantPast
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(t.bg2).cornerRadius(4)
+                    }
+                }
+            }
         }
     }
 
@@ -139,6 +154,18 @@ struct SettingsView: View {
 
     private var appearSection: some View {
         SSection(title:"APPEARANCE", theme:t) {
+            SRow(label: "Show Menu Bar Icon", theme: t) {
+                Toggle("", isOn: $settings.showTrayIcon).toggleStyle(.switch)
+            }
+            if settings.showTrayIcon {
+                SRow(label: "Menu Bar Format", theme: t) {
+                    Picker("",selection: $settings.trayFormat) {
+                        Text("Icon Only").tag("icon")
+                        Text("Ping Only").tag("ping")
+                        Text("Icon + Ping").tag("both")
+                    }.pickerStyle(.menu).frame(width: 140)
+                }
+            }
             SRow(label:"Theme", theme:t) {
                 Picker("",selection:$settings.theme) {
                     Text("Green").tag("green"); Text("Amber").tag("amber")
