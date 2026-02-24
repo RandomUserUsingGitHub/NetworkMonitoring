@@ -1,6 +1,6 @@
 cask "network-monitor" do
-  version "1.1.0"
-  sha256 "d78c65e069be47720c30502463c82371fc7b9694fcba0d2ab1a87b31f67507e2"
+  version "1.2.0"
+  sha256 "ca7376e92244bcce33b879f49167df2a699bcfd597d0d3559a88fdb8642b37f8"
 
   url "https://github.com/RandomUserUsingGitHub/NetworkMonitoring/releases/download/v#{version}/NetworkMonitor-release.zip"
   name "Network Monitor"
