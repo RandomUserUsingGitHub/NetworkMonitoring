@@ -34,7 +34,7 @@ _Coming soon_
 ### Homebrew (recommended)
 
 ```bash
-brew tap RandomUserUsingGitHub/tap
+brew tap RandomUserUsingGitHub/homebrew-tap
 brew install --cask network-monitor
 ```
 
@@ -77,9 +77,9 @@ The app has two parts:
 | Component | Description |
 |-----------|-------------|
 | `NetworkMonitor.app` | SwiftUI GUI — reads state files, shows live data |
-| `network_monitor.sh` | Bash daemon — runs in background, pings host, tracks IP |
+| `NetworkMonitor --daemon` | Native Swift daemon — runs in background, handles ping, IP tracking, and notifications natively |
 
-The daemon writes state to `/tmp/.netmon_*` files every few seconds. The app reads them on a 1-second timer. Settings are stored in `UserDefaults` and synced to `~/.config/network-monitor/settings.json` for the daemon.
+The daemon writes state to `/tmp/.netmon_*` files every few seconds. The app reads them on a 1-second timer without spawning sub-processes. Settings are stored in `UserDefaults` and synced to `~/.config/network-monitor/settings.json` for the daemon.
 
 ---
 
