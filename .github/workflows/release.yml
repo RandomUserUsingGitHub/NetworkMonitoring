@@ -55,10 +55,9 @@ jobs:
           APP="$GITHUB_WORKSPACE/.build/Build/Products/Release/NetworkMonitor.app"
           mkdir -p dist/daemon
           cp -R "$APP"                  dist/
-          cp daemon/netmon-toggle.sh    dist/daemon/
           cp install.sh                 dist/
           cp README.md                  dist/
-          chmod +x dist/install.sh dist/daemon/*.sh
+          chmod +x dist/install.sh
           zip -r NetworkMonitor-release.zip dist/ -x "*.DS_Store" -x "__MACOSX/*"
           echo "Zip size: $(du -sh NetworkMonitor-release.zip | cut -f1)"
           unzip -l NetworkMonitor-release.zip
