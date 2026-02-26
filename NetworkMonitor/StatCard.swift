@@ -5,12 +5,22 @@ struct StatCard: View {
     let value: String
     let color: Color
     let theme: AppTheme
+    var lastUpdate: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(theme.dim)
+            HStack(spacing: 4) {
+                Text(label)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Spacer()
+                if let t = lastUpdate {
+                    Text(t)
+                }
+            }
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(theme.dim)
+            
             Text(value)
                 .font(.system(size: 16, weight: .semibold, design: .monospaced))
                 .foregroundStyle(color)

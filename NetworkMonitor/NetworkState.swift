@@ -37,6 +37,7 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     @Published var latestPing:  Double?          = nil
     @Published var logEntries:  [LogEntry]       = []
     @Published var daemonRunning: Bool           = false
+    @Published var lastUpdateTime: Date?         = nil
     @Published var ipDetails:   IPDetails        = IPDetails()
 
     var publicIP: String { ipDetails.ip }
@@ -66,6 +67,8 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     private var lastIPFetch: Date   = .distantPast
     private var lastRawIP:   String = ""
     private var fetchInFlight = false
+    private var lastDaemonCheck: Date = .distantPast
+    private var lastLogModDate: Date = .distantPast
 
     // Tracking logic to fire notifications on state transition differences
     private var previousStatus: ConnectionStatus? = nil
@@ -76,7 +79,12 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
         setupNotifications()
     }
 
+    deinit {
+        timer?.invalidate()
+    }
+
     func start() {
+        guard timer == nil else { return }
         refresh()
         fetchIPDetails()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -102,7 +110,14 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
 
     // MARK: - File readers
 
+    private var lastStatusModDate: Date = .distantPast
+
     private func readStatus() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: statusFile.path),
+              let modDate = attrs[.modificationDate] as? Date else { return }
+        if modDate == lastStatusModDate { return }
+        lastStatusModDate = modDate
+        
         guard let raw = try? String(contentsOf: statusFile, encoding: .utf8) else { status = .starting; return }
         let newStatus = ConnectionStatus(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .starting
         
@@ -113,7 +128,18 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
         status = newStatus
     }
 
+    private var lastHistFileModDate: Date = .distantPast
+
     private func readPingHistory() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: histFile.path),
+              let modDate = attrs[.modificationDate] as? Date else { return }
+              
+        let sDate = (try? FileManager.default.attributesOfItem(atPath: statusFile.path)[.modificationDate] as? Date) ?? .distantPast
+        lastUpdateTime = max(modDate, sDate)
+        
+        if modDate == lastHistFileModDate && !pingHistory.isEmpty { return }
+        lastHistFileModDate = modDate
+        
         guard let raw = try? String(contentsOf: histFile, encoding: .utf8) else { pingHistory = []; latestPing = nil; return }
         let lines = raw.components(separatedBy: .newlines).filter { !$0.isEmpty }
         let tail  = Array(lines.suffix(settings.graphWidth))
@@ -124,7 +150,14 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
         latestPing = pingHistory.last.flatMap { $0 }
     }
 
+    private var lastIPStateModDate: Date = .distantPast
+    
     private func readIPState() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: ipFile.path),
+              let modDate = attrs[.modificationDate] as? Date else { return }
+        if modDate == lastIPStateModDate { return }
+        lastIPStateModDate = modDate
+        
         guard let raw = try? String(contentsOf: ipFile, encoding: .utf8) else { return }
         let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "|")
         let ip = parts.count > 0 ? parts[0] : ""
@@ -148,6 +181,11 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     }
 
     private func readLog() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: logFile.path),
+              let modDate = attrs[.modificationDate] as? Date else { return }
+        if modDate == lastLogModDate && !logEntries.isEmpty { return }
+        lastLogModDate = modDate
+
         guard let raw = try? String(contentsOf: logFile, encoding: .utf8) else { logEntries = []; return }
         let lines = Array(raw.components(separatedBy: .newlines).filter { !$0.isEmpty }.suffix(settings.logTailLines))
         logEntries = lines.map { line in
@@ -159,15 +197,7 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
                 let i21 = line.index(line.startIndex, offsetBy: 21)
                 text = "[" + line[i12..<i19] + "]" + line[i21...]
             }
-            // Censor any IPv4 in log display if hidden
-            if settings.ipHidden {
-                // simple regex for IPv4
-                text = text.replacingOccurrences(
-                    of: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b",
-                    with: "█████████",
-                    options: .regularExpression
-                )
-            }
+            // IP censorship has been moved to the View layer (EventRow) so it can dynamically update without locking to file read times.
             let kind: LogEntry.Kind
             if      line.contains("OUTAGE")      || line.contains("failed")    { kind = .outage   }
             else if line.contains("restored")    || line.contains("Restored")  { kind = .restored }
@@ -178,6 +208,10 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     }
 
     private func checkDaemon() {
+        let now = Date()
+        if now.timeIntervalSince(lastDaemonCheck) < 5.0 { return }
+        lastDaemonCheck = now
+        
         DispatchQueue.global(qos: .background).async {
             let t = Process()
             t.executableURL  = URL(fileURLWithPath: "/bin/launchctl")
@@ -195,25 +229,29 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
         guard !fetchInFlight else { return }
         fetchInFlight = true
         lastIPFetch   = Date()
+        
+        // Retain existing IP metadata to prevent blanking out when ip-api rate-limits or fails
+        let currentDetails = self.ipDetails
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            var details = IPDetails()
+            var details = currentDetails
 
             // IPv4 + geo via ip-api.com (HTTP is fine; sandbox is off)
             let fields = "status,query,isp,org,country,regionName,city,lat,lon,timezone,proxy,hosting"
             if let url  = URL(string: "http://ip-api.com/json/?fields=\(fields)"),
                let data = try? Data(contentsOf: url),   // ok because sandbox=false, ATS not enforced for non-sandboxed
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                details.ip        = json["query"]      as? String ?? "—"
-                details.isp       = json["isp"]        as? String ?? "—"
-                details.org       = json["org"]        as? String ?? "—"
-                details.country   = json["country"]    as? String ?? "—"
-                details.region    = json["regionName"] as? String ?? "—"
-                details.city      = json["city"]       as? String ?? "—"
-                details.timezone  = json["timezone"]   as? String ?? "—"
-                details.lat       = json["lat"]        as? Double ?? 0
-                details.lon       = json["lon"]        as? Double ?? 0
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let status = json["status"] as? String, status == "success" {
+                details.ip        = json["query"]      as? String ?? details.ip
+                details.isp       = json["isp"]        as? String ?? details.isp
+                details.org       = json["org"]        as? String ?? details.org
+                details.country   = json["country"]    as? String ?? details.country
+                details.region    = json["regionName"] as? String ?? details.region
+                details.city      = json["city"]       as? String ?? details.city
+                details.timezone  = json["timezone"]   as? String ?? details.timezone
+                details.lat       = json["lat"]        as? Double ?? details.lat
+                details.lon       = json["lon"]        as? Double ?? details.lon
                 let proxy         = json["proxy"]      as? Bool ?? false
                 let hosting       = json["hosting"]    as? Bool ?? false
                 details.vpnLikely = proxy || hosting
@@ -223,9 +261,7 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
             if let url6 = URL(string: "https://api6.ipify.org"),
                let ip6  = try? String(contentsOf: url6, encoding: .utf8) {
                 let trimmed = ip6.trimmingCharacters(in: .whitespacesAndNewlines)
-                details.ipv6 = trimmed.contains(":") ? trimmed : "Not available"
-            } else {
-                details.ipv6 = "Not available"
+                if trimmed.contains(":") { details.ipv6 = trimmed }
             }
 
             DispatchQueue.main.async {

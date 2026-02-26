@@ -175,6 +175,12 @@ struct SettingsView: View {
                         Text("Status Text").tag("status")
                     }.pickerStyle(.menu).frame(width: 140)
                 }
+                SRow(label: "Update Interval (sec)", theme: t) {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        DStepper(value: $settings.trayUpdateInterval, range: 1...60, step: 1, fmt: "%.0f")
+                        Text("Higher values use less CPU").font(.system(size: 9, design: .monospaced)).foregroundStyle(t.dim)
+                    }
+                }
             }
             SRow(label:"Theme", theme:t) {
                 Picker("",selection:$settings.theme) {

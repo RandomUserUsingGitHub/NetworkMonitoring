@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 final class Settings: ObservableObject {
     static let shared = Settings()
@@ -23,6 +24,8 @@ final class Settings: ObservableObject {
     // Tray
     @Published var showTrayIcon: Bool   { didSet { save() } }
     @Published var trayFormat:   String { didSet { save() } } // "icon", "ping", "both"
+    @Published var trayUpdateInterval: Double { didSet { save() } }
+
 
     // Notifications
     @Published var notificationsEnabled: Bool   { didSet { save() } }
@@ -62,6 +65,7 @@ final class Settings: ObservableObject {
         censorIPOnChange    = b("netmon.censorIPOnChange", false)
         showTrayIcon        = b("netmon.showTrayIcon", true)
         trayFormat          = s("netmon.trayFormat", "both")
+        trayUpdateInterval  = d("netmon.trayUpdateInterval", 2.0)
         notificationsEnabled = b("netmon.notificationsEnabled", true)
         notificationSound   = s("netmon.notificationSound", "Basso")
         muteOutagesUntil    = defaults.object(forKey: "netmon.muteOutagesUntil") as? Date ?? Date.distantPast
@@ -85,6 +89,7 @@ final class Settings: ObservableObject {
         ud.set(censorIPOnChange,     forKey:"netmon.censorIPOnChange")
         ud.set(showTrayIcon,         forKey:"netmon.showTrayIcon")
         ud.set(trayFormat,           forKey:"netmon.trayFormat")
+        ud.set(trayUpdateInterval,   forKey:"netmon.trayUpdateInterval")
         ud.set(notificationsEnabled, forKey:"netmon.notificationsEnabled")
         ud.set(notificationSound,    forKey:"netmon.notificationSound")
         ud.set(muteOutagesUntil,     forKey:"netmon.muteOutagesUntil")
@@ -121,11 +126,28 @@ final class Settings: ObservableObject {
     }
 
     private func applyLaunchAtLogin() {
-        guard FileManager.default.fileExists(atPath: plistURL.path) else { return }
-        let t = Process()
-        t.executableURL = URL(fileURLWithPath:"/bin/launchctl")
-        t.arguments = [launchAtLogin ? "load" : "unload", plistURL.path]
-        t.standardOutput = Pipe(); t.standardError = Pipe()
-        try? t.run(); t.waitUntilExit()
+        // 1. Enable/Disable daemon background ping script
+        if FileManager.default.fileExists(atPath: plistURL.path) {
+            let t = Process()
+            t.executableURL = URL(fileURLWithPath:"/bin/launchctl")
+            t.arguments = [launchAtLogin ? "load" : "unload", plistURL.path]
+            t.standardOutput = Pipe(); t.standardError = Pipe()
+            try? t.run(); t.waitUntilExit()
+        }
+        
+        // 2. Enable/Disable the main UI app launch
+        do {
+            if launchAtLogin {
+                if SMAppService.mainApp.status == .notRegistered {
+                    try SMAppService.mainApp.register()
+                }
+            } else {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                }
+            }
+        } catch {
+            print("Failed to toggle UI App login startup: \(error.localizedDescription)")
+        }
     }
 }

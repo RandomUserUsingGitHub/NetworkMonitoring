@@ -7,6 +7,7 @@ struct ContentView: View {
     @StateObject private var speedTestModel = SpeedTestModel()
     @ObservedObject private var settings = Settings.shared
     @State private var tab: Tab = .dashboard
+    @Environment(\.scenePhase) var scenePhase
     @State private var showSettings = false
 
     enum Tab { case dashboard, ipDetails, speedTest }
@@ -32,6 +33,14 @@ struct ContentView: View {
         }
         .onAppear  { model.start() }
         .onDisappear { model.stop() }
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .active {
+                model.start()
+            } else {
+                model.stop()
+                speedTestModel.cancel()
+            }
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView(model: model)
         }
@@ -178,35 +187,49 @@ struct StatsGrid: View {
     var t: AppTheme { model.theme }
 
     var body: some View {
+        let upd = lastUpdateString
         Grid(horizontalSpacing:10, verticalSpacing:10) {
             GridRow {
-                StatCard(label:"STATUS",   value:statusLabel, color:statusColor, theme:t)
-                StatCard(label:"PING  →  \(settings.pingHost)", value:pingLabel, color:pingColor, theme:t)
+                StatCard(label:"STATUS",   value:statusLabel, color:statusColor, theme:t, lastUpdate: upd)
+                StatCard(label:"PING  →  \(settings.pingHost)", value:pingLabel, color:pingColor, theme:t, lastUpdate: upd)
             }
             GridRow {
-                IPCard(model:model)
-                StatCard(label:"LOCATION", value:locationLabel, color:t.accent, theme:t)
+                IPCard(model:model, lastUpdate: upd)
+                StatCard(label:"LOCATION", value:locationLabel, color:t.accent, theme:t, lastUpdate: upd)
             }
         }
     }
+    
+    private var lastUpdateString: String? {
+        if model.daemonRunning { return nil }
+        guard let t = model.lastUpdateTime else { return "Unknown" }
+        let df = DateFormatter()
+        df.timeStyle = .short
+        return "\(df.string(from: t))"
+    }
 
     private var statusLabel: String {
+        if !model.daemonRunning { return "✖ OFFLINE (Stopped)" }
         switch model.status { case .online: return "● ONLINE"; case .offline: return "✖ OFFLINE"; case .starting: return "◌ Starting…" }
     }
     private var statusColor: Color {
+        if !model.daemonRunning { return t.offline }
         switch model.status { case .online: return t.online; case .offline: return t.offline; case .starting: return t.warn }
     }
     private var pingLabel: String {
+        if !model.daemonRunning { return "Off" }
         guard let p = model.latestPing else { return model.status == .offline ? "timeout" : "—" }
         return String(format:"%.1f ms", p)
     }
     private var pingColor: Color {
+        if !model.daemonRunning { return t.dim }
         guard let p = model.latestPing else { return t.offline }
         if p < settings.thresholdGood { return t.graphOk }
         if p < settings.thresholdWarn { return t.graphMid }
         return t.graphBad
     }
     private var locationLabel: String {
+        if !model.daemonRunning { return "Off" }
         let c=model.city, k=model.country
         if c.isEmpty||c=="—" { return k }
         return "\(c), \(k)"
@@ -217,23 +240,32 @@ struct StatsGrid: View {
 struct IPCard: View {
     @ObservedObject var model: NetworkStateModel
     @ObservedObject private var settings = Settings.shared
+    var lastUpdate: String? = nil
     var t: AppTheme { model.theme }
 
     var displayIP: String {
-        settings.ipHidden ? "••••••••••" : model.publicIP
+        if !model.daemonRunning { return "Off" }
+        return settings.ipHidden ? "••••••••••" : model.publicIP
     }
 
     var body: some View {
         VStack(alignment:.leading, spacing:4) {
             HStack(spacing:4) {
                 Text("PUBLIC IP")
-                    .font(.system(size:10, weight:.medium, design:.monospaced)).foregroundStyle(t.dim)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Spacer()
+                if let u = lastUpdate {
+                    Text(u)
+                }
                 Button(action:{ settings.ipHidden.toggle() }) {
                     Image(systemName: settings.ipHidden ? "eye.slash" : "eye")
-                        .font(.system(size:11)).foregroundStyle(t.dim)
+                        .font(.system(size:11))
                 }.buttonStyle(.plain)
             }
+            .font(.system(size:10, weight:.medium, design:.monospaced))
+            .foregroundStyle(t.dim)
+            
             Text(displayIP)
                 .font(.system(size:16, weight:.semibold, design:.monospaced))
                 .foregroundStyle(settings.ipHidden ? t.dim : t.warn)
@@ -341,11 +373,25 @@ struct EventsSection: View {
 
 struct EventRow: View {
     let entry: LogEntry; let theme: AppTheme
+    @ObservedObject private var settings = Settings.shared
+    
     private var color: Color {
         switch entry.kind { case .outage: return theme.offline; case .restored: return theme.online; case .ipChange: return theme.warn; case .info: return theme.dim }
     }
+    
     var body: some View {
-        Text(entry.text)
+        let textToShow: String = {
+            if settings.ipHidden {
+                return entry.text.replacingOccurrences(
+                    of: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b",
+                    with: "**********",
+                    options: .regularExpression
+                )
+            }
+            return entry.text
+        }()
+        
+        Text(textToShow)
             .font(.system(size:11, design:.monospaced)).foregroundStyle(color)
             .padding(.horizontal,12).padding(.vertical,6)
             .frame(maxWidth:.infinity, alignment:.leading)
