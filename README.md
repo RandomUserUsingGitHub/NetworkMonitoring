@@ -72,14 +72,14 @@ bash build_and_distribute.sh
 
 ## How it works
 
-The app has two parts:
+The app runs as a single process with two components:
 
 | Component | Description |
 |-----------|-------------|
-| `NetworkMonitor.app` | SwiftUI GUI — reads state files, shows live data |
-| `NetworkMonitor --daemon` | Native Swift daemon — runs in background, handles ping, IP tracking, and notifications natively |
+| **UI** | SwiftUI interface — live ping graph, IP details, speed test, settings |
+| **Background monitor** | Runs on a background thread — handles ping, IP tracking, and notifications |
 
-The daemon writes state to `/tmp/.netmon_*` files every few seconds. The app reads them on a 1-second timer without spawning sub-processes. Settings are stored in `UserDefaults` and synced to `~/.config/network-monitor/settings.json` for the daemon.
+The background monitor writes state to `/tmp/.netmon_*` files. The UI reads them on a 1-second timer. Monitoring continues even when the window is closed (the app stays in the menu bar). Settings are stored in `UserDefaults` and synced to `~/.config/network-monitor/settings.json`.
 
 ---
 
@@ -97,7 +97,7 @@ All settings are configurable in-app via the ⚙️ gear icon:
 | IP check interval | 10s | How often to check public IP |
 | Censor IP in notifications | off | Show only first octet in alerts |
 | Theme | green | green / amber / blue / red |
-| Launch at login | on | Start daemon automatically |
+| Launch at startup | on | Start app at login |
 | Subtitle text | "by Armin Hashemi" | Custom tagline |
 
 ---

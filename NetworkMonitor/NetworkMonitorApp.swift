@@ -3,16 +3,6 @@ import AppKit
 import UserNotifications
 
 @main
-struct AppLauncher {
-    static func main() {
-        if CommandLine.arguments.contains("--daemon") {
-            Daemon().run()
-        } else {
-            NetworkMonitorApp.main()
-        }
-    }
-}
-
 struct NetworkMonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var trayModel = TrayModel()
@@ -52,9 +42,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         Settings.shared.writeDaemonConfig()
+        Settings.shared.applyLaunchAtLogin()
+        
+        // Start the monitoring daemon as a background thread
+        Daemon.shared.start()
+        
+        // Clean up old launchd daemon plist (no longer needed)
+        let oldPlist = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.user.network-monitor.plist")
+        if FileManager.default.fileExists(atPath: oldPlist.path) {
+            let t = Process()
+            t.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            t.arguments = ["unload", oldPlist.path]
+            t.standardOutput = Pipe(); t.standardError = Pipe()
+            try? t.run(); t.waitUntilExit()
+            try? FileManager.default.removeItem(at: oldPlist)
+        }
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        return .terminateNow
+    }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
@@ -69,6 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 struct TrayLabelView: View {
     @ObservedObject var model: TrayModel
     @Environment(\.openWindow) private var openWindow
+    @State private var hasAutoOpened = false
     
     var body: some View {
         let isOnline = model.status == .online
@@ -135,6 +146,13 @@ struct TrayLabelView: View {
                         Text(pingStr)
                     }
                 }
+            }
+        }
+        .onAppear {
+            if !hasAutoOpened {
+                hasAutoOpened = true
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReopenMainWindow"))) { _ in
@@ -213,19 +231,12 @@ final class TrayModel: ObservableObject {
             let histMtime = (try? FileManager.default.attributesOfItem(atPath: self.histFile.path)[.modificationDate] as? Date) ?? .distantPast
             let statusMtime = (try? FileManager.default.attributesOfItem(atPath: self.statusFile.path)[.modificationDate] as? Date) ?? .distantPast
             
-            // Secure daemon check
-            // Secure daemon check (via PID to avoid launchctl processes and mtime bouncing)
+            // Check daemon status directly
             let now = Date()
             var daemonIsRunning = self.isDaemonRunning
             if now.timeIntervalSince(self.lastDaemonCheck) > 4.0 {
                 self.lastDaemonCheck = now
-                daemonIsRunning = false
-                if let pidStr = try? String(contentsOf: URL(fileURLWithPath: "/tmp/.netmon_pid"), encoding: .utf8),
-                   let pid = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    if kill(pid, 0) == 0 {
-                        daemonIsRunning = true
-                    }
-                }
+                daemonIsRunning = Daemon.shared.isRunning
             }
             
             if histMtime == self.lastHistFileModDate && statusMtime == self.lastStatusFileModDate && self.trayFormat == f && daemonIsRunning == self.isDaemonRunning {

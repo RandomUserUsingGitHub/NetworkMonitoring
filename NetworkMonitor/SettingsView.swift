@@ -201,7 +201,7 @@ struct SettingsView: View {
 
     private var systemSection: some View {
         SSection(title:"SYSTEM", theme:t) {
-            SRow(label:"Start daemon at login", theme:t) {
+            SRow(label:"Launch at startup", theme:t) {
                 Toggle("",isOn:$settings.launchAtLogin).toggleStyle(.switch).labelsHidden()
             }
         }
@@ -212,7 +212,7 @@ struct SettingsView: View {
     private var applyRow: some View {
         HStack {
             if restartPending {
-                Text("Daemon restart required to apply ping changes")
+                Text("Restart required to apply ping changes")
                     .font(.system(size:10,design:.monospaced)).foregroundStyle(t.warn)
             }
             Spacer()

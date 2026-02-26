@@ -60,8 +60,7 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     private let statusFile  = URL(fileURLWithPath: "/tmp/.netmon_status")
     private let logFile     = FileManager.default.homeDirectoryForCurrentUser
                                   .appendingPathComponent(".network_monitor.log")
-    private let daemonPlist = FileManager.default.homeDirectoryForCurrentUser
-                                  .appendingPathComponent("Library/LaunchAgents/com.user.network-monitor.plist")
+
 
     private var timer:       Timer?
     private var lastIPFetch: Date   = .distantPast
@@ -216,22 +215,7 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
         let now = Date()
         if now.timeIntervalSince(lastDaemonCheck) < 5.0 { return }
         lastDaemonCheck = now
-        
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            
-            var isRunning = false
-            if let pidStr = try? String(contentsOf: URL(fileURLWithPath: "/tmp/.netmon_pid"), encoding: .utf8),
-               let pid = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                if kill(pid, 0) == 0 {
-                    isRunning = true
-                }
-            }
-            
-            DispatchQueue.main.async {
-                self.daemonRunning = isRunning
-            }
-        }
+        daemonRunning = Daemon.shared.isRunning
     }
 
     // MARK: - IP enrichment (URLSession, not Data(contentsOf:))
@@ -285,49 +269,30 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     // MARK: - Daemon control
 
     func toggleDaemon() {
-        let action = daemonRunning ? "unload" : "load"
-        
-        // Optimistically update UI
-        self.daemonRunning = (action == "load")
-        if action == "load" { self.status = .starting }
-        
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            if action == "unload" {
-                try? FileManager.default.removeItem(atPath: "/tmp/.netmon_pid")
-            }
-            let t = Process()
-            t.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            t.arguments = [action, self.daemonPlist.path]
-            t.standardOutput = Pipe(); t.standardError = Pipe()
-            try? t.run(); t.waitUntilExit()
-            
-            if action == "unload" { self.settings.writeDaemonConfig() }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.refresh()
-            }
+        if daemonRunning {
+            Daemon.shared.stop()
+            daemonRunning = false
+            status = .offline
+        } else {
+            settings.writeDaemonConfig()
+            Daemon.shared.start()
+            daemonRunning = true
+            status = .starting
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.refresh()
         }
     }
 
     func restartDaemon() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            try? FileManager.default.removeItem(atPath: "/tmp/.netmon_pid")
-            let stop = Process()
-            stop.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            stop.arguments = ["unload", self.daemonPlist.path]
-            stop.standardOutput = Pipe(); stop.standardError = Pipe()
-            try? stop.run(); stop.waitUntilExit()
-            self.settings.writeDaemonConfig()
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                let start = Process()
-                start.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-                start.arguments = ["load", self.daemonPlist.path]
-                start.standardOutput = Pipe(); start.standardError = Pipe()
-                try? start.run(); start.waitUntilExit()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.refresh() }
+        Daemon.shared.stop()
+        settings.writeDaemonConfig()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            Daemon.shared.start()
+            self?.status = .starting
+            self?.daemonRunning = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self?.refresh()
             }
         }
     }
@@ -438,6 +403,8 @@ struct SettingsConfig: Codable {
 // MARK: - Daemon
 
 final class Daemon {
+    static let shared = Daemon()
+    
     let histFile = URL(fileURLWithPath: "/tmp/.netmon_ping_history")
     let ipStateFile = URL(fileURLWithPath: "/tmp/.netmon_ip_state")
     let statusFile = URL(fileURLWithPath: "/tmp/.netmon_status")
@@ -461,13 +428,65 @@ final class Daemon {
     var lastIP = ""
     var lastIPCheck = Date.distantPast
     
+    // Thread management
+    private var monitorThread: Thread?
+    private var _shouldStop = false
+    private let stateLock = NSLock()
+    
+    private var shouldStop: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _shouldStop }
+        set { stateLock.lock(); _shouldStop = newValue; stateLock.unlock() }
+    }
+    
+    var isRunning: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return monitorThread != nil && !_shouldStop
+    }
+    
     lazy var session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 5.0
         return URLSession(configuration: config)
     }()
+    
+    func start() {
+        stateLock.lock()
+        guard monitorThread == nil else { stateLock.unlock(); return }
+        _shouldStop = false
+        stateLock.unlock()
+        
+        let thread = Thread { [weak self] in
+            self?.run()
+            // Clean up when thread exits
+            self?.stateLock.lock()
+            self?.monitorThread = nil
+            self?.stateLock.unlock()
+        }
+        thread.qualityOfService = .utility
+        thread.name = "netmon-daemon"
+        
+        stateLock.lock()
+        monitorThread = thread
+        stateLock.unlock()
+        
+        thread.start()
+    }
+    
+    func stop() {
+        shouldStop = true
+        // Give the thread time to exit its current sleep cycle
+        Thread.sleep(forTimeInterval: 0.6)
+        
+        stateLock.lock()
+        monitorThread = nil
+        stateLock.unlock()
+        
+        try? FileManager.default.removeItem(atPath: pidFile.path)
+        log("=== Network Monitor Daemon Stopped ===")
+    }
 
-    func run() {
+    private func run() {
         createAppDirectories()
         setupInitialFiles()
         
@@ -481,17 +500,21 @@ final class Daemon {
         let category = UNNotificationCategory(identifier: "OUTAGE", actions: [mute1h, mute24], intentIdentifiers: [], options: [.customDismissAction])
         center.setNotificationCategories([category])
         
-        while true {
+        while !shouldStop {
             let start = Date()
             
             checkConfigUpdate()
             performPing()
             performIPCheckIfNeeded()
             
-            // Sleep for the remainder of the interval
+            // Sleep in small chunks so we can respond to stop() quickly
             let elapsed = Date().timeIntervalSince(start)
-            let sleepTime = max(0.1, config.ping.interval_seconds - elapsed)
-            Thread.sleep(forTimeInterval: sleepTime)
+            var remaining = max(0.1, config.ping.interval_seconds - elapsed)
+            while remaining > 0 && !shouldStop {
+                let chunk = min(remaining, 0.5)
+                Thread.sleep(forTimeInterval: chunk)
+                remaining -= chunk
+            }
         }
     }
     

@@ -1,5 +1,4 @@
 import SwiftUI
-import ServiceManagement
 
 final class Settings: ObservableObject {
     static let shared = Settings()
@@ -120,34 +119,35 @@ final class Settings: ObservableObject {
         }
     }
 
-    private var plistURL: URL {
+    private var loginPlistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/com.user.network-monitor.plist")
+            .appendingPathComponent("Library/LaunchAgents/com.armin.network-monitor.login.plist")
     }
 
-    private func applyLaunchAtLogin() {
-        // 1. Enable/Disable daemon background ping script
-        if FileManager.default.fileExists(atPath: plistURL.path) {
+    func applyLaunchAtLogin() {
+        let agentsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents")
+        try? FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+
+        if launchAtLogin {
+            // Create a LaunchAgent plist that opens the app at login
+            let plist: [String: Any] = [
+                "Label": "com.armin.network-monitor.login",
+                "ProgramArguments": ["/usr/bin/open", "/Applications/NetworkMonitor.app"],
+                "RunAtLoad": true,
+                "LaunchOnlyOnce": true
+            ]
+            if let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+                try? data.write(to: loginPlistURL)
+            }
+        } else {
+            // Unload and remove the plist
             let t = Process()
-            t.executableURL = URL(fileURLWithPath:"/bin/launchctl")
-            t.arguments = [launchAtLogin ? "load" : "unload", plistURL.path]
+            t.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            t.arguments = ["unload", loginPlistURL.path]
             t.standardOutput = Pipe(); t.standardError = Pipe()
             try? t.run(); t.waitUntilExit()
-        }
-        
-        // 2. Enable/Disable the main UI app launch
-        do {
-            if launchAtLogin {
-                if SMAppService.mainApp.status == .notRegistered {
-                    try SMAppService.mainApp.register()
-                }
-            } else {
-                if SMAppService.mainApp.status == .enabled {
-                    try SMAppService.mainApp.unregister()
-                }
-            }
-        } catch {
-            print("Failed to toggle UI App login startup: \(error.localizedDescription)")
+            try? FileManager.default.removeItem(at: loginPlistURL)
         }
     }
 }
