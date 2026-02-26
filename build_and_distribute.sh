@@ -101,11 +101,13 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/daemon"
 
 cp -R "$APP" "$DIST_DIR/"
-[[ -f "$SCRIPT_DIR/daemon/network_monitor.sh" ]] && cp "$SCRIPT_DIR/daemon/network_monitor.sh" "$DIST_DIR/daemon/" || warn "daemon/network_monitor.sh not found"
+
+echo "  ${BOLD}Configuring Scripts...${R}"
+
 [[ -f "$SCRIPT_DIR/daemon/netmon-toggle.sh"   ]] && cp "$SCRIPT_DIR/daemon/netmon-toggle.sh"   "$DIST_DIR/daemon/" || true
 [[ -f "$SCRIPT_DIR/install.sh" ]]                && cp "$SCRIPT_DIR/install.sh"   "$DIST_DIR/"  || warn "install.sh not found"
 [[ -f "$SCRIPT_DIR/README.md"  ]]                && cp "$SCRIPT_DIR/README.md"    "$DIST_DIR/"  || true
-chmod +x "$DIST_DIR/install.sh" "$DIST_DIR/daemon/"*.sh 2>/dev/null || true
+chmod +x "$DIST_DIR/install.sh" "$DIST_DIR/daemon/"* 2>/dev/null || true
 
 rm -f "$RELEASE_ZIP"
 cd "$SCRIPT_DIR"

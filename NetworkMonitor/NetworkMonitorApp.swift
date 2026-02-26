@@ -3,12 +3,22 @@ import AppKit
 import UserNotifications
 
 @main
+struct AppLauncher {
+    static func main() {
+        if CommandLine.arguments.contains("--daemon") {
+            Daemon().run()
+        } else {
+            NetworkMonitorApp.main()
+        }
+    }
+}
+
 struct NetworkMonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var trayModel = TrayModel()
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        Window("Network Monitor", id: "main") {
             ContentView()
                 .frame(width: 560, height: 620)
         }
@@ -17,9 +27,7 @@ struct NetworkMonitorApp: App {
         .commands { CommandGroup(replacing: .newItem) {} }
         
         MenuBarExtra {
-            Button("Open Network Monitor") {
-                AppDelegate.showMainWindow()
-            }
+            OpenWindowMenuItem()
             Divider()
             Button("Quit") {
                 NSApplication.shared.terminate(nil)
@@ -30,69 +38,29 @@ struct NetworkMonitorApp: App {
     }
 }
 
+struct OpenWindowMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Open Network Monitor") {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Keep a reference to the window so we can always surface it
-    private static var mainWindow: NSWindow?
-    
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         Settings.shared.writeDaemonConfig()
-        
-        // Capture the main window reference once it's created
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            AppDelegate.mainWindow = NSApp.windows.first(where: {
-                $0.canBecomeKey && !$0.className.contains("StatusBar")
-            })
-        }
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { AppDelegate.showMainWindow() }
+        if !flag {
+            NotificationCenter.default.post(name: Notification.Name("ReopenMainWindow"), object: nil)
+        }
         return true
-    }
-
-    static func showMainWindow() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        
-        // Aggressively search for any SwiftUI content window
-        let systemPrefixes = ["NSStatusBar", "_NSPopover", "NSMenuWindow", 
-                              "_NSBackstage", "_NSAlert", "NSPanel"]
-        
-        let contentWindows = NSApp.windows.filter { w in
-            let cls = String(describing: type(of: w))
-            return !systemPrefixes.contains(where: { cls.contains($0) })
-        }
-        
-        // Try cached reference first
-        if let w = mainWindow, contentWindows.contains(where: { $0 === w }) {
-            w.makeKeyAndOrderFront(nil)
-            w.orderFrontRegardless()
-            return
-        }
-        
-        // Find any existing content window (visible or not)
-        if let w = contentWindows.first(where: { $0.canBecomeKey }) ?? contentWindows.first {
-            w.makeKeyAndOrderFront(nil)
-            w.orderFrontRegardless()
-            mainWindow = w
-            return
-        }
-
-        // Absolutely no window found — ask SwiftUI to open one
-        // Use the undocumented but reliable selector that SwiftUI registers for WindowGroup
-        NSApp.sendAction(Selector(("newWindowForTab:")), to: nil, from: nil)
-        
-        // Capture the new window after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            mainWindow = NSApp.windows.first(where: { w in
-                let cls = String(describing: type(of: w))
-                return !systemPrefixes.contains(where: { cls.contains($0) }) && w.canBecomeKey
-            })
-            mainWindow?.makeKeyAndOrderFront(nil)
-        }
     }
 }
 
@@ -100,6 +68,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct TrayLabelView: View {
     @ObservedObject var model: TrayModel
+    @Environment(\.openWindow) private var openWindow
     
     var body: some View {
         let isOnline = model.status == .online
@@ -167,6 +136,10 @@ struct TrayLabelView: View {
                     }
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReopenMainWindow"))) { _ in
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
     
@@ -241,20 +214,17 @@ final class TrayModel: ObservableObject {
             let statusMtime = (try? FileManager.default.attributesOfItem(atPath: self.statusFile.path)[.modificationDate] as? Date) ?? .distantPast
             
             // Secure daemon check
+            // Secure daemon check (via PID to avoid launchctl processes and mtime bouncing)
             let now = Date()
             var daemonIsRunning = self.isDaemonRunning
             if now.timeIntervalSince(self.lastDaemonCheck) > 4.0 {
                 self.lastDaemonCheck = now
-                let t = Process()
-                t.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-                t.arguments = ["list"]
-                let p = Pipe()
-                t.standardOutput = p
-                try? t.run()
-                t.waitUntilExit()
-                if let data = try? p.fileHandleForReading.readToEnd(),
-                   let out = String(data: data, encoding: .utf8) {
-                    daemonIsRunning = out.contains("com.user.network-monitor")
+                daemonIsRunning = false
+                if let pidStr = try? String(contentsOf: URL(fileURLWithPath: "/tmp/.netmon_pid"), encoding: .utf8),
+                   let pid = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    if kill(pid, 0) == 0 {
+                        daemonIsRunning = true
+                    }
                 }
             }
             

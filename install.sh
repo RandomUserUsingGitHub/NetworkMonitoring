@@ -31,7 +31,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   osascript -e 'tell application "NetworkMonitor" to quit' 2>/dev/null || true
   launchctl unload "$DAEMON_PLIST" 2>/dev/null && ok "Daemon stopped" || true
   rm -f "$DAEMON_PLIST"                   && ok "Removed LaunchAgent"
-  rm -f "$INSTALL_DIR/network_monitor.sh" && ok "Removed daemon script"
+  rm -f "$INSTALL_DIR/network_monitor"    && ok "Removed daemon binary"
   rm -f "$INSTALL_DIR/netmon-toggle.sh"   && ok "Removed toggle script"
   read -rp "  Remove config and log? [y/N]: " yn
   if [[ "$(echo "${yn:-n}" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
@@ -92,13 +92,6 @@ JSON
   ok "Default config written"
 fi
 
-DAEMON_SRC="$SCRIPT_DIR/daemon/network_monitor.sh"
-[[ -f "$DAEMON_SRC" ]] || err "daemon/network_monitor.sh not found. Re-download the package."
-
-cp "$DAEMON_SRC" "$INSTALL_DIR/network_monitor.sh"
-chmod +x "$INSTALL_DIR/network_monitor.sh"
-ok "Daemon script installed"
-
 if [[ -f "$SCRIPT_DIR/daemon/netmon-toggle.sh" ]]; then
   cp "$SCRIPT_DIR/daemon/netmon-toggle.sh" "$INSTALL_DIR/netmon-toggle.sh"
   chmod +x "$INSTALL_DIR/netmon-toggle.sh"
@@ -114,8 +107,8 @@ cat > "$DAEMON_PLIST" <<PLIST
   <key>Label</key>             <string>com.user.network-monitor</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>${INSTALL_DIR}/network_monitor.sh</string>
+    <string>/Applications/NetworkMonitor.app/Contents/MacOS/NetworkMonitor</string>
+    <string>--daemon</string>
   </array>
   <key>RunAtLoad</key>         <true/>
   <key>KeepAlive</key>         <true/>

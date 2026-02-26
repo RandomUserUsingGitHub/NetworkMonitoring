@@ -74,9 +74,10 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     private var previousStatus: ConnectionStatus? = nil
     private var previousIP: String = ""
     
+    private var notificationsSetup = false
+
     override init() {
         super.init()
-        setupNotifications()
     }
 
     deinit {
@@ -84,6 +85,10 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
     }
 
     func start() {
+        if !notificationsSetup {
+            setupNotifications()
+            notificationsSetup = true
+        }
         guard timer == nil else { return }
         refresh()
         fetchIPDetails()
@@ -212,14 +217,20 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
         if now.timeIntervalSince(lastDaemonCheck) < 5.0 { return }
         lastDaemonCheck = now
         
-        DispatchQueue.global(qos: .background).async {
-            let t = Process()
-            t.executableURL  = URL(fileURLWithPath: "/bin/launchctl")
-            t.arguments      = ["list"]
-            let p = Pipe(); t.standardOutput = p; t.standardError = Pipe()
-            try? t.run(); t.waitUntilExit()
-            let out = String(data: p.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            DispatchQueue.main.async { self.daemonRunning = out.contains("com.user.network-monitor") }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
+            var isRunning = false
+            if let pidStr = try? String(contentsOf: URL(fileURLWithPath: "/tmp/.netmon_pid"), encoding: .utf8),
+               let pid = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                if kill(pid, 0) == 0 {
+                    isRunning = true
+                }
+            }
+            
+            DispatchQueue.main.async {
+                self.daemonRunning = isRunning
+            }
         }
     }
 
@@ -275,29 +286,49 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
 
     func toggleDaemon() {
         let action = daemonRunning ? "unload" : "load"
-        let t = Process()
-        t.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        t.arguments = [action, daemonPlist.path]
-        t.standardOutput = Pipe(); t.standardError = Pipe()
-        try? t.run(); t.waitUntilExit()
-        if !daemonRunning { settings.writeDaemonConfig() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.refresh() }
+        
+        // Optimistically update UI
+        self.daemonRunning = (action == "load")
+        if action == "load" { self.status = .starting }
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            if action == "unload" {
+                try? FileManager.default.removeItem(atPath: "/tmp/.netmon_pid")
+            }
+            let t = Process()
+            t.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            t.arguments = [action, self.daemonPlist.path]
+            t.standardOutput = Pipe(); t.standardError = Pipe()
+            try? t.run(); t.waitUntilExit()
+            
+            if action == "unload" { self.settings.writeDaemonConfig() }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.refresh()
+            }
+        }
     }
 
     func restartDaemon() {
-        let stop = Process()
-        stop.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        stop.arguments = ["unload", daemonPlist.path]
-        stop.standardOutput = Pipe(); stop.standardError = Pipe()
-        try? stop.run(); stop.waitUntilExit()
-        settings.writeDaemonConfig()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            let start = Process()
-            start.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            start.arguments = ["load", self.daemonPlist.path]
-            start.standardOutput = Pipe(); start.standardError = Pipe()
-            try? start.run(); start.waitUntilExit()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.refresh() }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            try? FileManager.default.removeItem(atPath: "/tmp/.netmon_pid")
+            let stop = Process()
+            stop.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            stop.arguments = ["unload", self.daemonPlist.path]
+            stop.standardOutput = Pipe(); stop.standardError = Pipe()
+            try? stop.run(); stop.waitUntilExit()
+            self.settings.writeDaemonConfig()
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                let start = Process()
+                start.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                start.arguments = ["load", self.daemonPlist.path]
+                start.standardOutput = Pipe(); start.standardError = Pipe()
+                try? start.run(); start.waitUntilExit()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.refresh() }
+            }
         }
     }
     
@@ -367,10 +398,340 @@ final class NetworkStateModel: NSObject, ObservableObject, UNUserNotificationCen
             settings.muteOutagesUntil = Date().addingTimeInterval(86400)
         } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
             DispatchQueue.main.async {
-                AppDelegate.showMainWindow()
+                NotificationCenter.default.post(name: Notification.Name("ReopenMainWindow"), object: nil)
             }
         }
         completionHandler()
     }
 }
 
+// MARK: - Models
+
+struct SettingsConfig: Codable {
+    struct PingConfig: Codable {
+        var host: String = "8.8.8.8"
+        var interval_seconds: Double = 2.0
+        var fail_threshold: Int = 3
+        var timeout_seconds: Double = 2.0
+        var packet_size: Int = 56
+        var history_size: Int = 60
+    }
+    struct IPCheckConfig: Codable {
+        var interval_seconds: Double = 10.0
+    }
+    struct NotificationsConfig: Codable {
+        var enabled: Bool = true
+        var sound: String = "Basso"
+        var censor_on_change: Bool = false
+    }
+    struct LogConfig: Codable {
+        var path: String? = nil
+        var tail_lines: Int = 7
+    }
+    
+    var ping: PingConfig = PingConfig()
+    var ip_check: IPCheckConfig = IPCheckConfig()
+    var notifications: NotificationsConfig = NotificationsConfig()
+    var log: LogConfig = LogConfig()
+}
+
+// MARK: - Daemon
+
+final class Daemon {
+    let histFile = URL(fileURLWithPath: "/tmp/.netmon_ping_history")
+    let ipStateFile = URL(fileURLWithPath: "/tmp/.netmon_ip_state")
+    let statusFile = URL(fileURLWithPath: "/tmp/.netmon_status")
+    let pidFile = URL(fileURLWithPath: "/tmp/.netmon_pid")
+    
+    // Notification center access for background alerts
+    let center = UNUserNotificationCenter.current()
+    
+    var logPath: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".network_monitor.log")
+    }
+    var cfgPath: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/network-monitor/settings.json")
+    }
+    
+    var config = SettingsConfig()
+    var cfgMtime: Date = .distantPast
+    
+    var failCount = 0
+    var outageActive = false
+    var lastIP = ""
+    var lastIPCheck = Date.distantPast
+    
+    lazy var session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 5.0
+        return URLSession(configuration: config)
+    }()
+
+    func run() {
+        createAppDirectories()
+        setupInitialFiles()
+        
+        log("=== Network Monitor Daemon (Swift) Started ===")
+        try? String(describing: getpid()).write(to: pidFile, atomically: true, encoding: .utf8)
+        
+        // Ensure notifications are registered
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let mute1h = UNNotificationAction(identifier: "MUTE_1H", title: "Mute 1 Hour", options: [])
+        let mute24 = UNNotificationAction(identifier: "MUTE_24H", title: "Mute 24 Hours", options: [])
+        let category = UNNotificationCategory(identifier: "OUTAGE", actions: [mute1h, mute24], intentIdentifiers: [], options: [.customDismissAction])
+        center.setNotificationCategories([category])
+        
+        while true {
+            let start = Date()
+            
+            checkConfigUpdate()
+            performPing()
+            performIPCheckIfNeeded()
+            
+            // Sleep for the remainder of the interval
+            let elapsed = Date().timeIntervalSince(start)
+            let sleepTime = max(0.1, config.ping.interval_seconds - elapsed)
+            Thread.sleep(forTimeInterval: sleepTime)
+        }
+    }
+    
+    // MARK: File I/O
+    
+    func createAppDirectories() {
+        let logDir = logPath.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+    }
+    
+    func setupInitialFiles() {
+        if !FileManager.default.fileExists(atPath: histFile.path) {
+            try? "".write(to: histFile, atomically: true, encoding: .utf8)
+        }
+        try? "fetching||".write(to: ipStateFile, atomically: true, encoding: .utf8)
+        try? "STARTING".write(to: statusFile, atomically: true, encoding: .utf8)
+    }
+    
+    func log(_ msg: String) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let timestamp = formatter.string(from: Date())
+        let line = "[\(timestamp)] \(msg)\n"
+        
+        if let handle = try? FileHandle(forWritingTo: logPath) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            try? line.write(to: logPath, atomically: true, encoding: .utf8)
+        }
+    }
+    
+    // MARK: Config
+    
+    func checkConfigUpdate() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: cfgPath.path),
+              let mtime = attrs[.modificationDate] as? Date,
+              mtime != cfgMtime else { return }
+        
+        cfgMtime = mtime
+        if let data = try? Data(contentsOf: cfgPath),
+           let newConfig = try? JSONDecoder().decode(SettingsConfig.self, from: data) {
+            self.config = newConfig
+            log("Config reloaded (threshold:\(config.ping.fail_threshold) timeout:\(config.ping.timeout_seconds)s pktsize:\(config.ping.packet_size)b host:\(config.ping.host))")
+        }
+    }
+    
+    // MARK: Ping Logic
+    
+    func performPing() {
+        let timeoutMs = max(1, Int(config.ping.timeout_seconds * 1000.0))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/sbin/ping")
+        process.arguments = ["-c", "1", "-W", "\(timeoutMs)", "-s", "\(config.ping.packet_size)", config.ping.host]
+        
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if process.terminationStatus == 0, let out = String(data: data, encoding: .utf8) {
+                // Success
+                var msValue = "1.0"
+                for line in out.components(separatedBy: .newlines) {
+                    if line.contains("round-trip") || line.contains("rtt") {
+                        let parts = line.components(separatedBy: "/")
+                        if parts.count > 4, let val = Double(parts[4]) {
+                            msValue = String(format: "%.1f", val)
+                        }
+                    }
+                }
+                
+                appendPing(msValue)
+                try? "ONLINE".write(to: statusFile, atomically: true, encoding: .utf8)
+                
+                if outageActive {
+                    log("Connection restored after \(failCount) failures.")
+                    sendNotification(title: "🟢 Internet Restored", body: "Connection to \(config.ping.host) is back.", categoryId: nil)
+                    outageActive = false
+                }
+                failCount = 0
+            } else {
+                handlePingFailure()
+            }
+        } catch {
+            handlePingFailure()
+        }
+    }
+    
+    func handlePingFailure() {
+        appendPing("T")
+        failCount += 1
+        log("Ping failed (\(failCount)/\(config.ping.fail_threshold))")
+        
+        if failCount >= config.ping.fail_threshold && !outageActive {
+            log("OUTAGE detected after \(failCount) consecutive failures.")
+            sendNotification(title: "🔴 Internet Outage", body: "Connection to \(config.ping.host) failed.", categoryId: "OUTAGE")
+            outageActive = true
+            try? "OFFLINE".write(to: statusFile, atomically: true, encoding: .utf8)
+        }
+    }
+    
+    func appendPing(_ val: String) {
+        if let handle = try? FileHandle(forWritingTo: histFile) {
+            handle.seekToEndOfFile()
+            handle.write((val + "\n").data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            try? (val + "\n").write(to: histFile, atomically: true, encoding: .utf8)
+        }
+        
+        // Truncate history file
+        if let raw = try? String(contentsOf: histFile, encoding: .utf8) {
+            var lines = raw.components(separatedBy: .newlines)
+            if lines.last == "" { lines.removeLast() }
+            if lines.count > config.ping.history_size {
+                let tail = lines.suffix(config.ping.history_size)
+                try? (tail.joined(separator: "\n") + "\n").write(to: histFile, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+    
+    // MARK: IP Check
+    
+    struct IPAPIResponse: Codable {
+        let status: String
+        let country: String?
+        let city: String?
+    }
+    struct IPInfoResponse: Codable {
+        let country: String?
+        let city: String?
+    }
+    
+    func performIPCheckIfNeeded() {
+        let now = Date()
+        guard now.timeIntervalSince(lastIPCheck) >= config.ip_check.interval_seconds else { return }
+        lastIPCheck = now
+        
+        // Perform sync network requests to avoid messy dispatch groups
+        let semaphore = DispatchSemaphore(value: 0)
+        var currentIP = ""
+        
+        let urls = ["https://api.ipify.org", "https://ifconfig.me/ip", "https://checkip.amazonaws.com"]
+        
+        func tryFetchIP(index: Int) {
+            guard index < urls.count else {
+                semaphore.signal()
+                return
+            }
+            let task = session.dataTask(with: URL(string: urls[index])!) { data, response, error in
+                if let data = data, let ip = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !ip.isEmpty {
+                    currentIP = ip
+                    semaphore.signal()
+                } else {
+                    tryFetchIP(index: index + 1)
+                }
+            }
+            task.resume()
+        }
+        
+        tryFetchIP(index: 0)
+        _ = semaphore.wait(timeout: .now() + 6.0)
+        
+        if !currentIP.isEmpty && currentIP != lastIP {
+            var country = "Unknown"
+            var city = "Unknown"
+            
+            let geoSemaphore = DispatchSemaphore(value: 0)
+            let geoTask = session.dataTask(with: URL(string: "http://ip-api.com/json/\(currentIP)?fields=status,country,city")!) { data, _, _ in
+                if let data = data, let obj = try? JSONDecoder().decode(IPAPIResponse.self, from: data), obj.status == "success" {
+                    country = obj.country ?? "Unknown"
+                    city = obj.city ?? "Unknown"
+                }
+                geoSemaphore.signal()
+            }
+            geoTask.resume()
+            _ = geoSemaphore.wait(timeout: .now() + 6.0)
+            
+            if country == "Unknown" { // Fallback
+                let gbSemaphore = DispatchSemaphore(value: 0)
+                let fallbackTask = session.dataTask(with: URL(string: "https://ipinfo.io/\(currentIP)/json")!) { data, _, _ in
+                    if let data = data, let obj = try? JSONDecoder().decode(IPInfoResponse.self, from: data) {
+                        country = obj.country ?? "Unknown"
+                        city = obj.city ?? "Unknown"
+                    }
+                    gbSemaphore.signal()
+                }
+                fallbackTask.resume()
+                _ = gbSemaphore.wait(timeout: .now() + 6.0)
+            }
+            
+            let displayIP = config.notifications.censor_on_change ? censor(ip: currentIP) : currentIP
+            
+            if !lastIP.isEmpty {
+                let displayOld = config.notifications.censor_on_change ? censor(ip: lastIP) : lastIP
+                log("IP changed: \(displayOld) -> \(displayIP) (\(city), \(country))")
+                sendNotification(title: "🌐 Public IP Changed", body: "New IP: \(displayIP)\n\(city), \(country)", categoryId: nil)
+            } else {
+                log("Initial IP: \(displayIP) (\(city), \(country))")
+            }
+            
+            lastIP = currentIP
+            try? "\(currentIP)|\(country)|\(city)".write(to: ipStateFile, atomically: true, encoding: .utf8)
+        }
+    }
+    
+    func sendNotification(title: String, body: String, categoryId: String?) {
+        guard config.notifications.enabled else { return }
+        
+        // Check for active UI snooze via UserDefaults cross-talk
+        if let ud = UserDefaults(suiteName: "com.armin.network-monitor"),
+           let muteUntil = ud.object(forKey: "netmon.muteOutagesUntil") as? Date,
+           muteUntil > Date(), categoryId == "OUTAGE" {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = UNNotificationSound(named: UNNotificationSoundName(config.notifications.sound))
+        if let cat = categoryId { content.categoryIdentifier = cat }
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        center.add(request) { error in
+            if let error = error {
+                print("[NetworkMonitor Daemon] Notification failed: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    func censor(ip: String) -> String {
+        let parts = ip.components(separatedBy: ".")
+        if parts.count == 4 {
+            return parts[0] + ".*.*.*"
+        }
+        return ip
+    }
+}

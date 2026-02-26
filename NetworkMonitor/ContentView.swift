@@ -201,7 +201,7 @@ struct StatsGrid: View {
     }
     
     private var lastUpdateString: String? {
-        if model.daemonRunning { return nil }
+        if model.daemonRunning && model.status == .online { return nil }
         guard let t = model.lastUpdateTime else { return "Unknown" }
         let df = DateFormatter()
         df.timeStyle = .short
@@ -230,9 +230,9 @@ struct StatsGrid: View {
     }
     private var locationLabel: String {
         if !model.daemonRunning { return "Off" }
-        let c=model.city, k=model.country
-        if c.isEmpty||c=="—" { return k }
-        return "\(c), \(k)"
+        let c = model.city, k = model.country
+        let loc = (c.isEmpty || c == "—") ? k : "\(c), \(k)"
+        return model.status == .offline ? loc + " (cached)" : loc
     }
 }
 
@@ -245,7 +245,8 @@ struct IPCard: View {
 
     var displayIP: String {
         if !model.daemonRunning { return "Off" }
-        return settings.ipHidden ? "••••••••••" : model.publicIP
+        let ipInfo = settings.ipHidden ? "••••••••••" : model.publicIP
+        return model.status == .offline ? ipInfo + " (cached)" : ipInfo
     }
 
     var body: some View {
@@ -382,11 +383,19 @@ struct EventRow: View {
     var body: some View {
         let textToShow: String = {
             if settings.ipHidden {
-                return entry.text.replacingOccurrences(
-                    of: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b",
-                    with: "**********",
-                    options: .regularExpression
-                )
+                var modified = entry.text
+                if let regex = try? NSRegularExpression(pattern: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b") {
+                    let matches = regex.matches(in: modified, range: NSRange(modified.startIndex..., in: modified))
+                    for match in matches.reversed() {
+                        if let range = Range(match.range, in: modified) {
+                            let ipFound = String(modified[range])
+                            if ipFound != settings.pingHost {
+                                modified.replaceSubrange(range, with: "**********")
+                            }
+                        }
+                    }
+                }
+                return modified
             }
             return entry.text
         }()
